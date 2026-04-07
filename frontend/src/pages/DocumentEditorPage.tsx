@@ -246,12 +246,27 @@ export default function DocumentEditorPage() {
             </button>
           </div>
         ) : (
-          <button
-            onClick={() => translate.start()}
-            className="px-4 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition-colors"
-          >
-            {hasTranslation ? '重新翻译' : '开始翻译'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => translate.start()}
+              className="px-4 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition-colors"
+            >
+              {hasTranslation ? '重新翻译' : '开始翻译'}
+            </button>
+            {hasTranslation && (
+              <button
+                onClick={() => {
+                  const a = document.createElement('a')
+                  a.href = `/api/documents/${docId}/download?which=translated`
+                  a.download = `translated_${docId}.docx`
+                  a.click()
+                }}
+                className="px-4 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors"
+              >
+                下载译文
+              </button>
+            )}
+          </div>
         )}
       </div>
 

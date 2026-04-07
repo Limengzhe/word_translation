@@ -4,14 +4,16 @@ POST /api/documents                        — 创建文档
 GET  /api/documents/{docId}               — 获取文档 + segments
 PATCH /api/documents/{docId}/full-html    — 保存编辑后的 HTML
 POST /api/documents/{docId}/translate-full/stream — 全文流式翻译
+GET  /api/documents/{docId}/download      — 下载译文 Word 文件
 """
+import io
 import json
 import uuid as _uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response, StreamingResponse
 from sqlmodel import Session, select
 
 from app.core.errors import AppError, ErrorCode
@@ -202,4 +204,33 @@ async def translate_full_stream(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.get("/{doc_id}/download")
+def download_docx(
+    doc_id: str,
+    which: str = Query(default="translated"),
+    session: Session = Depends(get_session),
+):
+    """将 HTML 转为 Word (.docx) 文件下载。which=source 下载原文，translated 下载译文。"""
+    from app.services.docx_export import html_to_docx
+
+    if which not in ("source", "translated"):
+        raise AppError(ErrorCode.VALIDATION_ERROR, "which must be 'source' or 'translated'", 422)
+
+    doc = session.get(Document, doc_id)
+    if not doc:
+        raise AppError(ErrorCode.NOT_FOUND, "Document not found", 404)
+
+    html = doc.full_translated_html if which == "translated" else doc.full_source_html
+    if not html:
+        raise AppError(ErrorCode.VALIDATION_ERROR, f"No {which} HTML available", 422)
+
+    buf = html_to_docx(html)
+    filename = f"{which}_{doc_id}.docx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
