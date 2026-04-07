@@ -132,8 +132,10 @@ export function usePatchFullHtml(docId: string) {
 
 // ── Translate Full HTML (SSE) ─────────────────────────────────────────────────
 
+const RENDER_INTERVAL_MS = 5_000
+
 /**
- * 流式翻译 hook：token 直接写 DOM，绕过 React 渲染周期以获得最低延迟。
+ * 流式翻译 hook：token 累积到内存，每 5 秒写一次 DOM。
  * 调用方通过 setTargetEl(ref.current) 注册目标 DOM 元素。
  */
 export function useTranslateFullStream(docId: string) {
@@ -143,11 +145,17 @@ export function useTranslateFullStream(docId: string) {
   const abortRef = useRef<boolean>(false)
   const collectedRef = useRef('')
   const targetElRef = useRef<HTMLElement | null>(null)
-  const rafRef = useRef(0)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const finalHtmlRef = useRef('')
 
   const setTargetEl = useCallback((el: HTMLElement | null) => {
     targetElRef.current = el
+  }, [])
+
+  const flushDom = useCallback(() => {
+    if (targetElRef.current && collectedRef.current) {
+      targetElRef.current.innerHTML = collectedRef.current
+    }
   }, [])
 
   const start = useCallback(
@@ -162,6 +170,10 @@ export function useTranslateFullStream(docId: string) {
       let firstTokenTime = 0
       let tokenCount = 0
       console.log(`[translateFull] start docId=${docId}`)
+
+      // 定时刷新 DOM
+      timerRef.current = setInterval(flushDom, RENDER_INTERVAL_MS)
+
       try {
         for await (const { event, data } of docApi.translateFullStream(docId, stylePreset)) {
           if (abortRef.current) break
@@ -178,17 +190,11 @@ export function useTranslateFullStream(docId: string) {
               firstTokenTime = performance.now() - t0
               console.log(`[translateFull] first token in ${firstTokenTime.toFixed(0)}ms`)
               setProgressText('翻译中…')
+              flushDom()
             }
-            // 直接写 DOM，用 rAF 合并高频更新
-            cancelAnimationFrame(rafRef.current)
-            rafRef.current = requestAnimationFrame(() => {
-              if (targetElRef.current) {
-                targetElRef.current.innerHTML = collectedRef.current
-              }
-            })
 
           } else if (event === 'completed') {
-            cancelAnimationFrame(rafRef.current)
+            if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
             const c = JSON.parse(data)
             const elapsed = performance.now() - t0
             console.log(
@@ -207,10 +213,8 @@ export function useTranslateFullStream(docId: string) {
             setProgressText('')
 
           } else if (event === 'error') {
-            cancelAnimationFrame(rafRef.current)
-            if (targetElRef.current && collectedRef.current) {
-              targetElRef.current.innerHTML = collectedRef.current
-            }
+            if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+            flushDom()
             const e = JSON.parse(data)
             console.error(`[translateFull] error`, e)
             setProgressText(`翻译失败：${e.message ?? e.code}`)
@@ -218,21 +222,20 @@ export function useTranslateFullStream(docId: string) {
         }
       } catch (err) {
         console.error(`[translateFull] stream error`, err)
-        cancelAnimationFrame(rafRef.current)
-        if (targetElRef.current && collectedRef.current) {
-          targetElRef.current.innerHTML = collectedRef.current
-        }
+        if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+        flushDom()
         setProgressText('连接中断')
       } finally {
+        if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
         setIsTranslating(false)
       }
     },
-    [docId, qc],
+    [docId, qc, flushDom],
   )
 
   const stop = useCallback(() => {
     abortRef.current = true
-    cancelAnimationFrame(rafRef.current)
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
   }, [])
 
   return { start, stop, isTranslating, progressText, setTargetEl, finalHtmlRef }
